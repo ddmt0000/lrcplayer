@@ -13,6 +13,12 @@
 | **无序星云** | 小歌词聚集中心，大歌词散开到边缘。支持边缘跟踪和模糊效果。 |
 | **纵向排列** | 传统纵向列表布局。支持焦点跟随和模糊效果。 |
 
+### 截图
+![RandomTile](./assets/screenshots/RandomTile.png)
+![WordCloud](./assets/screenshots/WordCloud.png)
+![Nebula](./assets/screenshots/Nebula.png)
+![List](./assets/screenshots/List.png)
+
 ### 播放器控制
 
 - 播放 / 暂停 / 上一首 / 下一首

@@ -13,6 +13,12 @@ A visual lyric player built with React and Bun, featuring multiple lyric display
 | **Nebula** | Small lyrics cluster at center, large lyrics spread to edges. Supports edge tracking and blur. |
 | **Vertical List** | Traditional vertical scrolling layout. Supports focus tracking and blur. |
 
+### Screenshots
+![RandomTile](./assets/screenshots/RandomTile.png)
+![WordCloud](./assets/screenshots/WordCloud.png)
+![Nebula](./assets/screenshots/Nebula.png)
+![List](./assets/screenshots/List.png)
+
 ### Player Controls
 
 - Play / Pause / Previous / Next
