@@ -535,7 +535,7 @@ function Player({
   effectMode, onEffectModeChange, followFocus, onFollowFocusChange,
   centerCurrent, onCenterCurrentChange, blurEffect, onBlurEffectChange,
   edgeTrack, onEdgeTrackChange, stopSort, onStopSortChange,
-  playerHidden, playerHoverRef,
+  playerHidden, playerHoverRef, onTogglePlayPage,
 }) {
   const [showList, setShowList] = useState(false);
   const [showEffects, setShowEffects] = useState(false);
@@ -776,26 +776,76 @@ function Player({
 
 // ─── App Component ───
 function App() {
+  // Load saved state from localStorage
+  const [savedState] = useState(() => {
+    try {
+      const raw = localStorage.getItem("lrc-player-state");
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+
   const [songs, setSongs] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(savedState?.currentIndex ?? 0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
+  const [currentTime, setCurrentTime] = useState(savedState?.currentTime ?? 0);
   const [duration, setDuration] = useState(0);
   const [lyrics, setLyrics] = useState([]);
-  const [loopMode, setLoopMode] = useState("list");
-  const [volume, setVolume] = useState(1);
+  const [loopMode, setLoopMode] = useState(savedState?.loopMode ?? "list");
+  const [volume, setVolume] = useState(savedState?.volume ?? 1);
   const audioRef = useRef(null);
   const [bgColor, setBgColor] = useState("#0a0a0a");
-  const [effectMode, setEffectMode] = useState(EFFECT_MODES.WORDCLOUD);
-  const [followFocus, setFollowFocus] = useState(true);
-  const [centerCurrent, setCenterCurrent] = useState(false);
-  const [blurEffect, setBlurEffect] = useState(true);
-  const [edgeTrack, setEdgeTrack] = useState(true);
-  const [stopSort, setStopSort] = useState(true);
+  const [effectMode, setEffectMode] = useState(savedState?.effectMode ?? EFFECT_MODES.WORDCLOUD);
+  const [followFocus, setFollowFocus] = useState(savedState?.followFocus ?? true);
+  const [centerCurrent, setCenterCurrent] = useState(savedState?.centerCurrent ?? false);
+  const [blurEffect, setBlurEffect] = useState(savedState?.blurEffect ?? true);
+  const [edgeTrack, setEdgeTrack] = useState(savedState?.edgeTrack ?? true);
+  const [stopSort, setStopSort] = useState(savedState?.stopSort ?? true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showPlayPage, setShowPlayPage] = useState(false);
   const [playerHidden, setPlayerHidden] = useState(false);
   const hideTimerRef = useRef(null);
   const playerHoverRef = useRef(false);
+  const loopModeRef = useRef(loopMode);
+  const songsRef = useRef(songs);
+
+  useEffect(() => { loopModeRef.current = loopMode; }, [loopMode]);
+  useEffect(() => { songsRef.current = songs; }, [songs]);
+
+  // Save state to localStorage
+  useEffect(() => {
+    const state = {
+      currentIndex,
+      currentTime: audioRef.current?.currentTime ?? currentTime,
+      loopMode,
+      volume,
+      effectMode,
+      followFocus,
+      centerCurrent,
+      blurEffect,
+      edgeTrack,
+      stopSort,
+    };
+    try { localStorage.setItem("lrc-player-state", JSON.stringify(state)); } catch {}
+  }, [currentIndex, currentTime, loopMode, volume, effectMode, followFocus, centerCurrent, blurEffect, edgeTrack, stopSort]);
+
+  // Validate saved currentIndex when songs load
+  useEffect(() => {
+    if (songs.length > 0 && currentIndex >= songs.length) {
+      setCurrentIndex(0);
+    }
+  }, [songs.length, currentIndex]);
+
+  // Restore playback position after audio loads
+  useEffect(() => {
+    if (!audioRef.current || !savedState?.currentTime) return;
+    const audio = audioRef.current;
+    const onCanPlay = () => {
+      audio.currentTime = savedState.currentTime;
+      setSavedState(null); // Only restore once
+    };
+    audio.addEventListener("canplay", onCanPlay, { once: true });
+    return () => audio.removeEventListener("canplay", onCanPlay);
+  }, [currentIndex]);
 
   useEffect(() => {
     fetch("/api/songs").then((r) => r.json()).then(setSongs);
@@ -817,9 +867,11 @@ function App() {
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const onDurationChange = () => setDuration(audio.duration || 0);
     const onEnded = () => {
-      if (loopMode === "single") { audio.currentTime = 0; audio.play(); }
-      else if (loopMode === "shuffle") { setCurrentIndex(Math.floor(Math.random() * songs.length)); }
-      else { setCurrentIndex((i) => (i + 1) % songs.length); }
+      const mode = loopModeRef.current;
+      const list = songsRef.current;
+      if (mode === "single") { audio.currentTime = 0; audio.play(); }
+      else if (mode === "shuffle") { setCurrentIndex(Math.floor(Math.random() * list.length)); }
+      else { setCurrentIndex((i) => (i + 1) % list.length); }
     };
 
     audio.addEventListener("timeupdate", onTimeUpdate);
@@ -833,7 +885,20 @@ function App() {
       audio.removeEventListener("ended", onEnded);
       audio.pause();
     };
-  }, [currentIndex, currentSong?.music, loopMode]);
+  }, [currentIndex, currentSong?.music]);
+
+  // Media Session API - sync with browser media controls
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentSong?.name || "未知歌曲",
+    });
+  }, [currentSong?.name]);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+  }, [isPlaying]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -912,26 +977,98 @@ function App() {
     if (audioRef.current) audioRef.current.volume = v;
   }, []);
 
+  // Media Session API - action handlers
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    const handlers = {
+      play: () => { if (!isPlaying) handlePlayPause(); },
+      pause: () => { if (isPlaying) handlePlayPause(); },
+      previoustrack: () => handlePrev(),
+      nexttrack: () => handleNext(),
+      seekto: (details) => { if (details.seekTime != null) handleSeek(details.seekTime); },
+      seekbackward: () => handleSeek(Math.max(0, (audioRef.current?.currentTime || 0) - 10)),
+      seekforward: () => handleSeek(Math.min(duration, (audioRef.current?.currentTime || 0) + 10)),
+    };
+    for (const [action, handler] of Object.entries(handlers)) {
+      navigator.mediaSession.setActionHandler(action, handler);
+    }
+    return () => {
+      for (const action of Object.keys(handlers)) {
+        navigator.mediaSession.setActionHandler(action, null);
+      }
+    };
+  }, [isPlaying, handlePlayPause, handlePrev, handleNext, handleSeek, duration]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      // Don't handle if user is typing in an input
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+      if (e.code === "Space") {
+        e.preventDefault();
+        handlePlayPause();
+      } else if (e.ctrlKey && e.code === "ArrowLeft") {
+        e.preventDefault();
+        handlePrev();
+      } else if (e.ctrlKey && e.code === "ArrowRight") {
+        e.preventDefault();
+        handleNext();
+      } else if (e.ctrlKey && e.code === "ArrowUp") {
+        e.preventDefault();
+        handleVolumeChange(Math.min(1, volume + 0.1));
+      } else if (e.ctrlKey && e.code === "ArrowDown") {
+        e.preventDefault();
+        handleVolumeChange(Math.max(0, volume - 0.1));
+      } else if (e.ctrlKey && e.code === "KeyM") {
+        e.preventDefault();
+        handleVolumeChange(volume > 0 ? 0 : 1);
+      } else if (!e.ctrlKey && e.code === "ArrowLeft") {
+        e.preventDefault();
+        handleSeek(Math.max(0, (audioRef.current?.currentTime || 0) - 10));
+      } else if (!e.ctrlKey && e.code === "ArrowRight") {
+        e.preventDefault();
+        handleSeek(Math.min(duration, (audioRef.current?.currentTime || 0) + 10));
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [handlePlayPause, handlePrev, handleNext, handleVolumeChange, handleSeek, volume, duration]);
+
   return React.createElement("div", { className: "app", style: { backgroundColor: bgColor, overflow: playerHidden ? "hidden" : "visible" } },
-    React.createElement("div", { className: "lyric-area" },
-      React.createElement(LyricCloud, {
-        lyrics, currentTime, onSeek: handleSeek,
-        effectMode, followFocus, centerCurrent, blurEffect, edgeTrack, stopSort
-      })
+    // Home page (visible when play page is hidden)
+    React.createElement("div", { className: "home-page" },
+      React.createElement("h1", null, "Ddmt Music")
     ),
-    React.createElement(Player, {
-      songs, currentIndex, isPlaying, currentTime, duration, loopMode, volume,
-      onPlayPause: handlePlayPause, onPrev: handlePrev, onNext: handleNext,
-      onSeek: handleSeek, onLoopModeChange: setLoopMode, onVolumeChange: handleVolumeChange,
-      onSelectSong: (i) => { setCurrentIndex(i); setIsPlaying(true); },
-      effectMode, onEffectModeChange: setEffectMode,
-      followFocus, onFollowFocusChange: setFollowFocus,
-      centerCurrent, onCenterCurrentChange: setCenterCurrent,
-      blurEffect, onBlurEffectChange: setBlurEffect,
-      edgeTrack, onEdgeTrackChange: setEdgeTrack,
-      stopSort, onStopSortChange: setStopSort,
-      playerHidden, playerHoverRef,
-    })
+    // Play page (slides up/down to show/hide)
+    React.createElement("div", {
+      className: "play-page",
+      style: {
+        transform: showPlayPage ? "translateY(0)" : "translateY(100%)",
+        transition: "transform 0.5s cubic-bezier(0.25, 0.1, 0.25, 1)",
+      },
+    },
+      React.createElement("div", { className: "lyric-area" },
+        React.createElement(LyricCloud, {
+          lyrics, currentTime, onSeek: handleSeek,
+          effectMode, followFocus, centerCurrent, blurEffect, edgeTrack, stopSort
+        })
+      ),
+      React.createElement(Player, {
+        songs, currentIndex, isPlaying, currentTime, duration, loopMode, volume,
+        onPlayPause: handlePlayPause, onPrev: handlePrev, onNext: handleNext,
+        onSeek: handleSeek, onLoopModeChange: setLoopMode, onVolumeChange: handleVolumeChange,
+        onSelectSong: (i) => { setCurrentIndex(i); setIsPlaying(true); },
+        effectMode, onEffectModeChange: setEffectMode,
+        followFocus, onFollowFocusChange: setFollowFocus,
+        centerCurrent, onCenterCurrentChange: setCenterCurrent,
+        blurEffect, onBlurEffectChange: setBlurEffect,
+        edgeTrack, onEdgeTrackChange: setEdgeTrack,
+        stopSort, onStopSortChange: setStopSort,
+        playerHidden, playerHoverRef,
+        onTogglePlayPage: () => setShowPlayPage(v => !v),
+      })
+    )
   );
 }
 
